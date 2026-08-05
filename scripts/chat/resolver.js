@@ -11,10 +11,18 @@ import {
   uniqueStrings
 } from "../utils.js";
 
-const ID_KEYS = new Set([
+const SPECIFIC_ID_KEYS = Object.freeze([
   "itemId", "itemID", "weaponId", "weaponID", "attackId", "attackID",
   "monsterAttackId", "monsterAttackID", "monsterattackId", "monsterattackID"
 ]);
+const GENERIC_ID_KEYS = Object.freeze(["id", "_id"]);
+const OBJECT_ID_KEYS = Object.freeze([...SPECIFIC_ID_KEYS, ...GENERIC_ID_KEYS]);
+const OBJECT_UUID_KEYS = Object.freeze([
+  "uuid", "documentUuid", "documentUUID", "itemUuid", "itemUUID",
+  "weaponUuid", "weaponUUID", "attackUuid", "attackUUID",
+  "monsterAttackUuid", "monsterAttackUUID", "monsterattackUuid", "monsterattackUUID"
+]);
+const ID_KEYS = new Set(SPECIFIC_ID_KEYS);
 const UUID_KEYS = new Set([
   "itemUuid", "itemUUID", "weaponUuid", "weaponUUID", "attackUuid", "attackUUID",
   "monsterAttackUuid", "monsterAttackUUID", "monsterattackUuid", "monsterattackUUID"
@@ -47,7 +55,9 @@ function directBoolean(value) {
 function candidateKey(candidate) {
   if (candidate.kind === "document" || candidate.kind === "object") {
     const value = candidate.value ?? {};
-    const identity = value.uuid ?? value.id ?? value._id ?? value.itemId ?? value.attackId
+    const identity = [...OBJECT_UUID_KEYS, ...OBJECT_ID_KEYS]
+      .map(key => value[key])
+      .find(entry => entry != null && String(entry).trim())
       ?? `${value.type ?? candidate.type ?? ""}:${value.name ?? candidate.name ?? "unknown"}`;
     return `${candidate.kind}:${identity}`;
   }
@@ -81,7 +91,9 @@ function addValueCandidate(output, value, { hint = "", source = "unknown", prior
 
   if (typeof value === "object") {
     const documentName = value.documentName ?? value.constructor?.metadata?.name;
-    if (documentName === "Item" || value?.type && (value?.id || value?._id || value?.uuid)) {
+    const hasIdentity = [...OBJECT_UUID_KEYS, ...OBJECT_ID_KEYS]
+      .some(key => value[key] != null && String(value[key]).trim());
+    if (documentName === "Item" || value?.type && hasIdentity) {
       pushCandidate(output, {
         kind: documentName === "Item" ? "document" : "object",
         value,
@@ -93,13 +105,12 @@ function addValueCandidate(output, value, { hint = "", source = "unknown", prior
       });
     }
 
-    const uuidKeys = ["uuid", "documentUuid", "itemUuid", "weaponUuid", "attackUuid", "monsterAttackUuid"];
-    const hasDocumentUuid = uuidKeys.some(key => isDocumentUuid(String(value[key] ?? "")));
-    for (const key of uuidKeys) {
+    const hasDocumentUuid = OBJECT_UUID_KEYS.some(key => isDocumentUuid(String(value[key] ?? "")));
+    for (const key of OBJECT_UUID_KEYS) {
       if (value[key] != null) addValueCandidate(output, value[key], { hint: "uuid", source, priority: priority + 10, authority, type: value.type ?? type });
     }
     if (!hasDocumentUuid) {
-      for (const key of ["id", "_id", "itemId", "weaponId", "attackId", "monsterAttackId"]) {
+      for (const key of OBJECT_ID_KEYS) {
         if (value[key] != null) addValueCandidate(output, value[key], { hint: "id", source, priority: priority + 5, authority, type: value.type ?? type });
       }
     }
@@ -377,14 +388,33 @@ async function resolveCandidate(candidate, actor) {
 
   if (candidate.kind === "object") {
     const value = candidate.value;
-    const uuid = value.uuid ?? value.itemUuid ?? value.attackUuid;
-    if (uuid) {
-      const byUuid = await resolveCandidate({ ...candidate, kind: "uuid", value: uuid }, actor);
-      if (byUuid) return byUuid;
+    const resolvedByUuid = [];
+    for (const uuid of uniqueStrings(OBJECT_UUID_KEYS.map(key => value[key]))) {
+      if (!isDocumentUuid(uuid)) continue;
+      const item = await resolveCandidate({ ...candidate, kind: "uuid", value: uuid }, actor);
+      if (item) resolvedByUuid.push(item);
     }
+    const uniqueUuidItems = [...new Map(
+      resolvedByUuid.map(item => [item.uuid ?? item.id, item])
+    ).values()];
+    if (uniqueUuidItems.length === 1) return uniqueUuidItems[0];
+    if (uniqueUuidItems.length > 1) return null;
+
+    for (const idKeys of [SPECIFIC_ID_KEYS, GENERIC_ID_KEYS]) {
+      const resolvedById = [];
+      for (const id of uniqueStrings(idKeys.map(key => value[key]))) {
+        if (!isDocumentId(id)) continue;
+        const item = await resolveCandidate({ ...candidate, kind: "id", value: id }, actor);
+        if (item) resolvedById.push(item);
+      }
+      const uniqueIdItems = [...new Map(
+        resolvedById.map(item => [item.uuid ?? item.id, item])
+      ).values()];
+      if (uniqueIdItems.length === 1) return uniqueIdItems[0];
+      if (uniqueIdItems.length > 1) return null;
+    }
+
     if (actor) {
-      const byId = resolveActorItemById(actor, value.id ?? value._id ?? value.itemId ?? value.attackId);
-      if (byId) return byId;
       const byName = resolveActorItemByName(actor, value.name, value.type ?? candidate.type);
       if (byName) return byName;
     }

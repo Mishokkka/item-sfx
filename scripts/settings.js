@@ -134,7 +134,11 @@ export function isFirstActiveGM() {
 function getActiveGMs() {
   return collectionContents(globalThis.game?.users)
     .filter(user => user?.active && user?.isGM && user?.id)
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    .sort((a, b) => {
+      const left = String(a.id);
+      const right = String(b.id);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
 }
 
 /** Normalize a Foundry user reference to a string identifier. */

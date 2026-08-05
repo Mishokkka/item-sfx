@@ -242,6 +242,141 @@ test("object UUID identity wins over a colliding embedded item id", async () => 
   assert.equal(result.item, imported);
 });
 
+test("object resolution tries every supported UUID before ID fallback", async () => {
+  const validUuid = "Compendium.world.weapons.valid123";
+  const staleUuid = "Compendium.world.weapons.stale123";
+  const imported = item({
+    id: "imported12345678",
+    uuid: "Actor.newactor.Item.imported12345678",
+    flags: { core: { sourceId: validUuid } }
+  });
+  const collision = item({
+    id: "collision1234567",
+    uuid: "Actor.newactor.Item.collision1234567",
+    name: "Unrelated sword",
+    flags: {}
+  });
+  const actor = {
+    id: "newactor",
+    uuid: "Actor.newactor",
+    name: "Imported",
+    items: itemCollection([collision, imported])
+  };
+  const sourceDocument = item({
+    id: "valid123",
+    uuid: validUuid,
+    documentName: "Item",
+    parent: { documentName: "Compendium" }
+  });
+  const calls = [];
+  installResolverGlobals(actor, {
+    fromUuid: async uuid => {
+      calls.push(uuid);
+      return uuid === validUuid ? sourceDocument : null;
+    }
+  });
+
+  const result = await analyzeAttackMessage({
+    id: "multi-uuid-object-message",
+    speaker: { actor: actor.id },
+    rolls: [{
+      options: {
+        isAttack: true,
+        item: {
+          type: "weapon",
+          documentUuid: staleUuid,
+          weaponUuid: validUuid,
+          id: collision.id,
+          name: imported.name
+        }
+      }
+    }]
+  });
+
+  assert.equal(result.status, "matched");
+  assert.equal(result.item, imported);
+  assert.ok(calls.includes(staleUuid));
+  assert.ok(calls.includes(validUuid));
+});
+
+test("specific object IDs take precedence over generic object IDs", async () => {
+  const target = item({
+    id: "targetitem123456",
+    uuid: "Actor.actor123.Item.targetitem123456",
+    type: "monsterAttack",
+    name: "Bite"
+  });
+  const collision = item({
+    id: "collision1234567",
+    uuid: "Actor.actor123.Item.collision1234567",
+    type: "weapon",
+    name: "Unrelated sword"
+  });
+  const actor = { id: "actor123", uuid: "Actor.actor123", items: itemCollection([collision, target]) };
+  installResolverGlobals(actor);
+
+  const result = await analyzeAttackMessage({
+    id: "specific-id-object-message",
+    speaker: { actor: actor.id },
+    rolls: [{
+      options: {
+        isAttack: true,
+        item: {
+          type: "monsterAttack",
+          id: collision.id,
+          monsterAttackId: target.id,
+          name: target.name
+        }
+      }
+    }]
+  });
+
+  assert.equal(result.status, "matched");
+  assert.equal(result.item, target);
+});
+
+test("source remapping ignores collection-local bare ID collisions", async () => {
+  const sourceUuid = "Compendium.world.weapons.sharedsource";
+  const imported = item({
+    id: "imported12345678",
+    uuid: "Actor.newactor.Item.imported12345678",
+    flags: {},
+    _stats: {}
+  });
+  const collision = item({
+    id: "sharedsource",
+    uuid: "Actor.newactor.Item.sharedsource",
+    name: "Unrelated sword",
+    flags: {},
+    _stats: {}
+  });
+  const actor = {
+    id: "newactor",
+    uuid: "Actor.newactor",
+    items: itemCollection([collision, imported])
+  };
+  const sourceDocument = item({
+    id: "sharedsource",
+    uuid: sourceUuid,
+    documentName: "Item",
+    parent: { documentName: "Compendium" },
+    flags: {},
+    _stats: {}
+  });
+  installResolverGlobals(actor, {
+    fromUuid: async uuid => uuid === sourceUuid ? sourceDocument : null
+  });
+
+  const result = await analyzeAttackMessage({
+    id: "bare-id-collision-message",
+    speaker: { actor: actor.id },
+    rolls: [{ options: { isAttack: true, itemUuid: sourceUuid } }]
+  });
+
+  assert.equal(result.status, "matched");
+  assert.equal(result.item, imported);
+});
+
 test("RollTable exclusion wins even when roll options claim an attack", async () => {
   const musket = item();
   const actor = { id: "actor123", uuid: "Actor.actor123", name: "Shooter", items: itemCollection([musket]) };
