@@ -33,7 +33,6 @@ export function isUsableConfig(config) {
 export function collectSourceIds(item) {
   const values = [
     item?.uuid,
-    item?.id,
     rawFlag(item, "core", "sourceId"),
     item?._source?.flags?.core?.sourceId,
     item?._stats?.compendiumSource,

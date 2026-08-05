@@ -61,6 +61,24 @@ test("first active GM selection is deterministic", () => {
   assert.equal(isFirstActiveGM(), true);
 });
 
+test("first active GM ordering uses locale-independent code-point order", () => {
+  globalThis.game = {
+    user: { id: "Z-gm" },
+    users: {
+      contents: [
+        { id: "a-gm", active: true, isGM: true },
+        { id: "Z-gm", active: true, isGM: true }
+      ]
+    },
+    settings: { get: (_module, key) => key === "playMode" ? "first-gm" : false }
+  };
+
+  const policy = getPlaybackPolicy({});
+  assert.equal(policy.firstGMId, "Z-gm");
+  assert.equal(policy.allowed, true);
+  assert.equal(isFirstActiveGM(), true);
+});
+
 test("author playback policy normalizes _source.author documents", () => {
   globalThis.game = {
     user: { id: "author2" },
