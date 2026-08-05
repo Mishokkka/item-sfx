@@ -3,6 +3,7 @@ import { normalizeConfig } from "./domain.js";
 import { getActorItemBackupConfig } from "./backup.js";
 import { localize, safeGetFlag } from "./utils.js";
 
+/** Read effective item configuration from current, legacy, or actor-backup data. */
 export function getItemSfxConfig(item) {
   if (!item) return null;
 
@@ -22,6 +23,7 @@ export function getItemSfxConfig(item) {
   return getActorItemBackupConfig(item);
 }
 
+/** Persist a normalized Item SFX configuration in one document update. */
 export async function setItemSfxConfig(item, config, { notify = true } = {}) {
   if (!globalThis.game?.user?.isGM) {
     if (notify) globalThis.ui?.notifications?.warn(localize("FLIS.Warn.GmOnly"));
@@ -35,13 +37,16 @@ export async function setItemSfxConfig(item, config, { notify = true } = {}) {
   const normalized = normalizeConfig(config);
   if (!normalized) return clearItemSfxConfig(item, { notify });
 
-  await item.setFlag(MODULE_ID, FLAGS.config, normalized);
-  await item.unsetFlag?.(MODULE_ID, "playlistId");
-  await item.unsetFlag?.(MODULE_ID, "soundId");
+  await item.update({
+    [`flags.${MODULE_ID}.${FLAGS.config}`]: normalized,
+    [`flags.${MODULE_ID}.-=playlistId`]: null,
+    [`flags.${MODULE_ID}.-=soundId`]: null
+  });
   if (notify) globalThis.ui?.notifications?.info(localize("FLIS.Notify.Saved"));
   return true;
 }
 
+/** Remove current and legacy Item SFX flags in one document update. */
 export async function clearItemSfxConfig(item, { notify = true } = {}) {
   if (!globalThis.game?.user?.isGM) {
     if (notify) globalThis.ui?.notifications?.warn(localize("FLIS.Warn.GmOnly"));
@@ -52,9 +57,11 @@ export async function clearItemSfxConfig(item, { notify = true } = {}) {
     return false;
   }
 
-  await item.unsetFlag?.(MODULE_ID, FLAGS.config);
-  await item.unsetFlag?.(MODULE_ID, "playlistId");
-  await item.unsetFlag?.(MODULE_ID, "soundId");
+  await item.update({
+    [`flags.${MODULE_ID}.-=${FLAGS.config}`]: null,
+    [`flags.${MODULE_ID}.-=playlistId`]: null,
+    [`flags.${MODULE_ID}.-=soundId`]: null
+  });
   if (notify) globalThis.ui?.notifications?.info(localize("FLIS.Notify.Cleared"));
   return true;
 }

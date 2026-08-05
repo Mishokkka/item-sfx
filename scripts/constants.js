@@ -27,6 +27,7 @@ export const PLAYBACK = Object.freeze({
 export const DEFAULT_PLAYLIST_NAME = "Item SFX";
 export const SOCKET_CHANNEL = `module.${MODULE_ID}`;
 export const BACKUP_VERSION = 2;
+export const BACKUP_MINIMUM_MATCH_SCORE = 30;
 export const MESSAGE_FRESHNESS_MS = 20_000;
 export const MESSAGE_STATE_TTL_MS = 60_000;
 export const MESSAGE_RENDER_WAIT_MS = 2_500;

@@ -12,11 +12,24 @@ import { analyzeAttackMessage, getRollCount } from "./resolver.js";
 
 const states = new Map();
 
+/** Cancel timers and permanently disable one chat-message coordinator state. */
+function disposeState(state) {
+  if (!state) return;
+  state.disposed = true;
+  state.done = true;
+  clearTimeout(state.timer);
+  clearTimeout(state.cleanupTimer);
+  state.timer = null;
+  state.cleanupTimer = null;
+}
+
+/** Resolve a ChatMessage creation timestamp across Foundry data shapes. */
 function getMessageTimestamp(message) {
   const timestamp = Number(message?.timestamp ?? message?._source?.timestamp ?? 0);
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+/** Reject old messages so module reloads do not replay historical attacks. */
 function isFreshMessage(message) {
   const timestamp = getMessageTimestamp(message);
   if (!timestamp) return true;
@@ -24,13 +37,19 @@ function isFreshMessage(message) {
   return age < 0 || age <= MESSAGE_FRESHNESS_MS;
 }
 
+/** Schedule guarded removal of an inactive message state. */
 function cleanupState(id, state, delay = MESSAGE_STATE_TTL_MS) {
+  if (state.disposed) return;
   clearTimeout(state.cleanupTimer);
   state.cleanupTimer = setTimeout(() => {
-    if (states.get(id) === state) states.delete(id);
+    if (states.get(id) === state) {
+      disposeState(state);
+      states.delete(id);
+    }
   }, delay);
 }
 
+/** Get or create bounded coordinator state for one ChatMessage. */
 function getState(message) {
   const id = message?.id;
   if (!id) return null;
@@ -47,21 +66,27 @@ function getState(message) {
       dirty: false,
       done: false,
       attempts: 0,
-      renderWait: false
+      renderWait: false,
+      disposed: false
     };
     states.set(id, state);
     if (states.size > 500) {
       const oldest = states.keys().next().value;
-      if (oldest) states.delete(oldest);
+      if (oldest) {
+        const evicted = states.get(oldest);
+        disposeState(evicted);
+        states.delete(oldest);
+      }
     }
   }
   return state;
 }
 
+/** Merge create/render hook data and schedule one message analysis pass. */
 export function enqueueChatMessage(message, html = null, context = {}) {
   if (!getSetting(SETTINGS.enabled, true) || !message?.id) return;
   const state = getState(message);
-  if (!state || state.done) return;
+  if (!state || state.done || state.disposed) return;
 
   state.message = message;
   const root = asHTMLElement(html);
@@ -76,8 +101,9 @@ export function enqueueChatMessage(message, html = null, context = {}) {
   cleanupState(state.id, state);
 }
 
+/** Analyze one message state and play at most one configured attack SFX. */
 async function processState(state) {
-  if (state.done) return;
+  if (state.done || state.disposed) return;
   if (state.processing) {
     state.dirty = true;
     return;
@@ -110,6 +136,7 @@ async function processState(state) {
 
     const context = Object.assign({}, ...state.contexts);
     const analysis = await analyzeAttackMessage(message, state.root, context);
+    if (state.disposed) return;
     debug("message analysis", {
       messageId: message?.id,
       status: analysis.status,
@@ -147,6 +174,7 @@ async function processState(state) {
     // Mark before awaiting audio to close the create/render race window.
     state.done = true;
     const result = await playItemSfx(config, { broadcast: policy.broadcast });
+    if (state.disposed) return;
     debug("sound playback", {
       messageId: message?.id,
       item: { id: analysis.item.id, uuid: analysis.item.uuid, name: analysis.item.name },
@@ -159,18 +187,20 @@ async function processState(state) {
     console.error("fl-item-sfx | failed to process ChatMessage", error);
   } finally {
     state.processing = false;
-    if (!state.done && state.dirty) {
+    if (!state.disposed && !state.done && state.dirty) {
       clearTimeout(state.timer);
       state.timer = setTimeout(() => void processState(state), 0);
     }
-    cleanupState(state.id, state, state.renderWait ? MESSAGE_RENDER_WAIT_MS : MESSAGE_STATE_TTL_MS);
+    if (!state.disposed) {
+      cleanupState(state.id, state, state.renderWait ? MESSAGE_RENDER_WAIT_MS : MESSAGE_STATE_TTL_MS);
+    }
   }
 }
 
+/** Dispose and clear all coordinator state, primarily for tests and reloads. */
 export function resetMessageCoordinator() {
   for (const state of states.values()) {
-    clearTimeout(state.timer);
-    clearTimeout(state.cleanupTimer);
+    disposeState(state);
   }
   states.clear();
 }

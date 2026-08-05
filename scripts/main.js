@@ -16,12 +16,12 @@ import {
 } from "./config.js";
 import { normalizeConfig } from "./domain.js";
 import { enqueueChatMessage } from "./chat/coordinator.js";
-import { ItemSfxToolsMenuBridge, openItemSfxForm, openItemSfxTools } from "./ui/dialogs.js";
+import { getItemSfxToolsMenuBridge, openItemSfxForm, openItemSfxTools } from "./ui/dialogs.js";
 import { tryInjectItemButton } from "./ui/item-sheet.js";
 import { rawFlag } from "./utils.js";
 
 Hooks.once("init", () => {
-  registerSettings(ItemSfxToolsMenuBridge);
+  registerSettings(getItemSfxToolsMenuBridge());
 
   globalThis.game.flItemSfx = {
     open: openItemSfxForm,
@@ -33,7 +33,7 @@ Hooks.once("init", () => {
     rebuildActorBackups: rebuildActorItemBackups,
     restoreActorBackups: restoreAllActorItemBackups,
     audit: auditItemSfxReferences,
-    version: globalThis.game.modules.get(MODULE_ID)?.version ?? "unknown"
+    version: globalThis.game?.modules?.get?.(MODULE_ID)?.version ?? "unknown"
   };
 
   console.info(`${MODULE_ID} | initialized`);
@@ -98,16 +98,20 @@ Hooks.on("deleteItem", item => {
   if (item?.parent?.documentName === "Actor") void removeActorItemBackup(item);
 });
 
+/** Read and normalize only the configuration stored directly on an item. */
 function getOwnConfigFromRaw(item) {
   const raw = rawFlag(item, MODULE_ID, FLAGS.config);
   if (raw?.disabled) return null;
   return normalizeConfig(raw);
 }
 
-function itemConfigWasChanged(changes) {
+/** Detect updates that add, replace, or delete the module configuration flags. */
+export function itemConfigWasChanged(changes) {
   if (!changes || typeof changes !== "object") return false;
   if (Object.hasOwn(changes, `flags.${MODULE_ID}.${FLAGS.config}`)) return true;
   if (Object.hasOwn(changes, `flags.${MODULE_ID}.-=${FLAGS.config}`)) return true;
+  if (Object.hasOwn(changes, `flags.-=${MODULE_ID}`)) return true;
+  if (Object.hasOwn(changes.flags ?? {}, `-=${MODULE_ID}`)) return true;
   const namespace = changes.flags?.[MODULE_ID];
   return !!namespace && (
     Object.hasOwn(namespace, FLAGS.config)

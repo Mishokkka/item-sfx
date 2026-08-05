@@ -43,5 +43,12 @@
   "FLIS.Tools.AuditNotes": "Считает отсутствующие плейлисты, звуки и неоднозначные резервные совпадения, не изменяя документы.",
   "FLIS.Tools.BackupDone": "Бэкапы пересобраны. Актёров: {actors}. Предметов: {items}. Ошибок: {failed}. Пропущено: {skipped}.",
   "FLIS.Tools.RestoreDone": "Восстановление завершено. Актёров: {actors}. Восстановлено: {restored}. Неоднозначно: {ambiguous}. Ошибок: {failed}. Пропущено: {skipped}.",
-  "FLIS.Tools.AuditDone": "Аудит завершён. Настроено: {configured}. Нет плейлиста: {missingPlaylist}. Нет звука: {missingSound}. Неоднозначных бэкапов: {ambiguousBackup}."
+  "FLIS.Tools.AuditDone": "Аудит завершён. Настроено: {configured}. Нет плейлиста: {missingPlaylist}. Нет звука: {missingSound}. Неоднозначных бэкапов: {ambiguousBackup}.",
+  "FLIS.Tools.IncludeCompendiums": "Включить компендиумы",
+  "FLIS.Tools.ConfirmBackupTitle": "Подтверждение пересборки бэкапов",
+  "FLIS.Tools.ConfirmBackup": "Операция перезапишет сохранённый Item SFX backup у каждого затронутого актёра. Продолжить?",
+  "FLIS.Tools.ConfirmRestoreTitle": "Подтверждение восстановления привязок",
+  "FLIS.Tools.ConfirmRestore": "Операция запишет отсутствующие настройки Item SFX обратно во встроенные предметы. Продолжить?",
+  "FLIS.Tools.CompendiumWarning": "Включены разблокированные компендиумы. Их документы также могут быть изменены.",
+  "FLIS.Tools.Confirm": "Продолжить"
 }

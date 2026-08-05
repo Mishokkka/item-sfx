@@ -1,11 +1,11 @@
-import { MODULE_ID, PLAYBACK, SOCKET_CHANNEL } from "./constants.js";
+import { MODULE_ID, PLAYBACK, SETTINGS, SOCKET_CHANNEL } from "./constants.js";
 import { normalizeConfig } from "./domain.js";
 import { getSetting, debug } from "./settings.js";
-import { SETTINGS } from "./constants.js";
 import { clamp, collectionContents, localize } from "./utils.js";
 
 let socketRegistered = false;
 
+/** Register the validated module-socket audio receiver once. */
 export function registerAudioSocket() {
   if (socketRegistered || !globalThis.game?.socket?.on) return;
   socketRegistered = true;
@@ -23,6 +23,7 @@ export function registerAudioSocket() {
   });
 }
 
+/** Resolve configured playlist sounds and play them with optional broadcast. */
 export async function playItemSfx(config, { broadcast = true } = {}) {
   const normalized = normalizeConfig(config);
   if (!normalized) return { played: 0, failed: 0 };
@@ -60,6 +61,7 @@ export async function playItemSfx(config, { broadcast = true } = {}) {
   };
 }
 
+/** Play one PlaylistSound locally and optionally broadcast it. */
 async function playPlaylistSound(sound, playlist, { broadcast }) {
   const src = String(sound?.path ?? sound?.src ?? sound?.file ?? "").trim();
   if (!src) throw new Error(`${MODULE_ID} | PlaylistSound has no source path`);
@@ -74,6 +76,7 @@ async function playPlaylistSound(sound, playlist, { broadcast }) {
   return true;
 }
 
+/** Verify that a socket payload points to the declared PlaylistSound path. */
 function isAuthorizedPlaylistSound(payload, src) {
   const playlistId = String(payload?.playlistId ?? "").trim();
   const soundId = String(payload?.soundId ?? "").trim();
@@ -85,25 +88,22 @@ function isAuthorizedPlaylistSound(payload, src) {
   return !!knownSrc && knownSrc === src;
 }
 
+/** Emit one validated Item SFX playback request on the module socket. */
 function broadcastSound(src, volume, { playlistId, soundId }) {
   const socket = globalThis.game?.socket;
-  if (socket?.emit) {
-    socket.emit(SOCKET_CHANNEL, {
-      type: "play-sfx",
-      src,
-      volume,
-      senderId: globalThis.game?.user?.id ?? null,
-      playlistId,
-      soundId
-    });
-    return;
-  }
-
-  // Last-resort compatibility path if the module socket is unavailable.
-  const helper = globalThis.AudioHelper ?? globalThis.foundry?.audio?.AudioHelper;
-  if (helper?.play) helper.play({ src, volume, autoplay: true, loop: false }, true);
+  if (!socket?.emit) return false;
+  socket.emit(SOCKET_CHANNEL, {
+    type: "play-sfx",
+    src,
+    volume,
+    senderId: globalThis.game?.user?.id ?? null,
+    playlistId,
+    soundId
+  });
+  return true;
 }
 
+/** Play one non-looping sound through the available Foundry audio API. */
 export async function playLocalSound(src, volume = 0.8) {
   const SoundClass = globalThis.foundry?.audio?.Sound ?? globalThis.Sound;
   if (SoundClass) {
