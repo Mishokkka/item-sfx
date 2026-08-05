@@ -1,0 +1,48 @@
+{
+  "id": "fl-item-sfx",
+  "title": "Forbidden Lands Item SFX",
+  "description": "Attack-bound item sound effects for Forbidden Lands. Supports weapons and monster attacks, actor compendium roundtrips, Foundry VTT v13 and v14.",
+  "version": "2.0.0",
+  "authors": [
+    {
+      "name": "Михаил"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "14",
+    "maximum": "14"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "forbidden-lands",
+        "type": "system",
+        "compatibility": {
+          "minimum": "13.0.5",
+          "verified": "14.0.4"
+        }
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    "styles/fl-item-sfx.css"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    },
+    {
+      "lang": "ru",
+      "name": "Русский",
+      "path": "lang/ru.json"
+    }
+  ],
+  "socket": true,
+  "license": "LICENSE"
+}

@@ -1,0 +1,24 @@
+.flis-header-button {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  min-width: 1.5rem;
+}
+
+.flis-form .form-group {
+  margin-bottom: 0.75rem;
+}
+
+.flis-form select {
+  width: 100%;
+}
+
+.flis-tools-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.flis-tools-form > p {
+  margin: 0;
+}
