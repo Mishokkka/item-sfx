@@ -43,5 +43,12 @@
   "FLIS.Tools.AuditNotes": "Count missing playlists, sounds, and ambiguous backup matches without changing documents.",
   "FLIS.Tools.BackupDone": "Backups rebuilt. Actors: {actors}. Items: {items}. Failed: {failed}. Skipped: {skipped}.",
   "FLIS.Tools.RestoreDone": "Restore finished. Actors: {actors}. Restored: {restored}. Ambiguous: {ambiguous}. Failed: {failed}. Skipped: {skipped}.",
-  "FLIS.Tools.AuditDone": "Audit finished. Configured: {configured}. Missing playlists: {missingPlaylist}. Missing sounds: {missingSound}. Ambiguous backups: {ambiguousBackup}."
+  "FLIS.Tools.AuditDone": "Audit finished. Configured: {configured}. Missing playlists: {missingPlaylist}. Missing sounds: {missingSound}. Ambiguous backups: {ambiguousBackup}.",
+  "FLIS.Tools.IncludeCompendiums": "Include compendiums",
+  "FLIS.Tools.ConfirmBackupTitle": "Confirm backup rebuild",
+  "FLIS.Tools.ConfirmBackup": "This overwrites the stored Item SFX backup for every affected actor. Continue?",
+  "FLIS.Tools.ConfirmRestoreTitle": "Confirm binding restore",
+  "FLIS.Tools.ConfirmRestore": "This writes missing Item SFX settings back to embedded items. Continue?",
+  "FLIS.Tools.CompendiumWarning": "Unlocked compendiums are included and may also be modified.",
+  "FLIS.Tools.Confirm": "Continue"
 }

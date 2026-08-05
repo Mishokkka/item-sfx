@@ -1,4 +1,9 @@
-import { FLAGS, MODULE_ID, PLAYBACK } from "./constants.js";
+import {
+  BACKUP_MINIMUM_MATCH_SCORE,
+  FLAGS,
+  MODULE_ID,
+  PLAYBACK
+} from "./constants.js";
 import {
   backupStorePayload,
   collectSourceIds,
@@ -20,6 +25,7 @@ import {
   safeGetFlag
 } from "./utils.js";
 
+/** Read current or legacy configuration stored directly on an item. */
 function getStoredItemConfig(item) {
   const current = normalizeConfig(safeGetFlag(item, MODULE_ID, FLAGS.config));
   if (current) return current;
@@ -32,6 +38,7 @@ function getStoredItemConfig(item) {
 
 const actorBackupQueues = new Map();
 
+/** Serialize actor-backup read-modify-write operations per actor. */
 async function withActorBackupQueue(actor, operation) {
   const key = String(actor?.uuid ?? actor?.id ?? "");
   if (!key) return operation();
@@ -45,22 +52,27 @@ async function withActorBackupQueue(actor, operation) {
   }
 }
 
+/** Return the parent actor for an embedded item. */
 export function getParentActor(item) {
   return item?.parent?.documentName === "Actor" ? item.parent : null;
 }
 
+/** Read and normalize an actor Item SFX backup store. */
 export function getActorBackupStore(actor) {
   const raw = safeGetFlag(actor, MODULE_ID, FLAGS.actorBackup)
     ?? rawFlag(actor, MODULE_ID, FLAGS.actorBackup);
   return normalizeBackupStore(raw);
 }
 
+/** Resolve an embedded item configuration from its parent actor backup. */
 export function getActorItemBackupConfig(item) {
   const actor = getParentActor(item);
   if (!actor) return null;
 
   const store = getActorBackupStore(actor);
-  const match = selectUniqueBestMatch(store.items, item, { minimumScore: 30 });
+  const match = selectUniqueBestMatch(store.items, item, {
+    minimumScore: BACKUP_MINIMUM_MATCH_SCORE
+  });
   if (!match) return null;
   return normalizeConfig({
     playlistId: match.playlistId,
@@ -69,6 +81,7 @@ export function getActorItemBackupConfig(item) {
   });
 }
 
+/** Check exact embedded item id or UUID identity. */
 function exactEntryIdentityMatch(entry, item) {
   if (!entry || !item) return false;
   return !!(
@@ -77,12 +90,14 @@ function exactEntryIdentityMatch(entry, item) {
   );
 }
 
+/** Check whether an item and backup entry share a stable source identity. */
 function sourceIdentityOverlaps(entry, item) {
   const itemSources = collectSourceIds(item);
   const entrySources = new Set([entry?.uuid, ...(entry?.sourceIds ?? [])].filter(Boolean).map(String));
   return [...entrySources].some(source => itemSources.has(source));
 }
 
+/** Find backup entries that can be safely replaced for one actor item. */
 function replacementEntryIndexes(store, actor, item) {
   const entries = store?.items ?? [];
   const direct = entries
@@ -91,13 +106,12 @@ function replacementEntryIndexes(store, actor, item) {
   if (direct.length) return new Set(direct);
 
   const actorItems = collectionContents(actor?.items);
+  const itemSources = collectSourceIds(item);
   const sourceEntries = entries
     .map((entry, index) => sourceIdentityOverlaps(entry, item) ? index : -1)
     .filter(index => index >= 0);
-  const sourceActorMatches = actorItems.filter(candidate => {
-    const itemSources = collectSourceIds(item);
-    return [...collectSourceIds(candidate)].some(source => itemSources.has(source));
-  });
+  const sourceActorMatches = actorItems.filter(candidate =>
+    [...collectSourceIds(candidate)].some(source => itemSources.has(source)));
   if (sourceEntries.length === 1 && sourceActorMatches.length === 1) return new Set(sourceEntries);
 
   const signature = getItemSignature(item);
@@ -109,6 +123,7 @@ function replacementEntryIndexes(store, actor, item) {
   return new Set();
 }
 
+/** Insert or replace one configured embedded item in its actor backup. */
 export async function syncActorItemBackup(item, config) {
   const actor = getParentActor(item);
   const entry = makeBackupEntry(item, config);
@@ -129,6 +144,7 @@ export async function syncActorItemBackup(item, config) {
   });
 }
 
+/** Remove the uniquely identified backup entry for an embedded item. */
 export async function removeActorItemBackup(item) {
   const actor = getParentActor(item);
   if (!actor) return false;
@@ -147,6 +163,7 @@ export async function removeActorItemBackup(item) {
   });
 }
 
+/** Resolve an actor item from an id or UUID recorded in actor backup. */
 export function findActorItemFromBackupCandidate(actor, value) {
   if (!actor?.items || value == null) return null;
   const candidate = String(value).trim();
@@ -162,6 +179,7 @@ export function findActorItemFromBackupCandidate(actor, value) {
   return findActorItemForBackupEntries(actor, matchingEntries);
 }
 
+/** Resolve a unique best actor item across candidate backup entries. */
 export function findActorItemForBackupEntries(actor, entries) {
   const items = collectionContents(actor?.items);
   if (!items.length || !entries?.length) return null;
@@ -184,6 +202,7 @@ export function findActorItemForBackupEntries(actor, entries) {
   return bestItems.length === 1 ? bestItems[0] : null;
 }
 
+/** Restore missing embedded item flags from one actor backup. */
 export async function restoreActorItemBackups(actor) {
   if (!actor?.items || !globalThis.game?.user?.isGM) return { restored: 0, ambiguous: 0 };
   const store = getActorBackupStore(actor);
@@ -199,7 +218,7 @@ export async function restoreActorItemBackups(actor) {
 
     const matching = store.items
       .map(entry => ({ entry, score: scoreBackupEntry(entry, item) }))
-      .filter(result => result.score >= 30)
+      .filter(result => result.score >= BACKUP_MINIMUM_MATCH_SCORE)
       .sort((a, b) => b.score - a.score);
     if (!matching.length) continue;
     if (matching.length > 1 && matching[0].score === matching[1].score) {
@@ -228,10 +247,12 @@ export async function restoreActorItemBackups(actor) {
   }
 }
 
+/** Build a stable key for actor collection deduplication. */
 function actorDeduplicationKey(actor) {
   return String(actor?.uuid ?? actor?.id ?? "");
 }
 
+/** Collect writable world actors and optional actor-compendium documents. */
 async function collectActors({ includeCompendiums = false } = {}) {
   const actors = new Map();
   const add = (actor, metadata = {}) => {
@@ -247,16 +268,7 @@ async function collectActors({ includeCompendiums = false } = {}) {
   }
 
   if (includeCompendiums) {
-    for (const pack of globalThis.game?.packs ?? []) {
-      const documentName = pack?.documentName ?? pack?.metadata?.type;
-      if (documentName !== "Actor") continue;
-      let documents = [];
-      try {
-        documents = await pack.getDocuments();
-      } catch (error) {
-        console.warn(`${MODULE_ID} | failed to read Actor compendium`, pack?.collection, error);
-        continue;
-      }
+    for (const { pack, documents } of await getPackDocuments("Actor", "actor collection")) {
       for (const actor of documents) add(actor, { pack, locked: isPackLocked(pack) });
     }
   }
@@ -264,6 +276,7 @@ async function collectActors({ includeCompendiums = false } = {}) {
   return [...actors.values()];
 }
 
+/** Rebuild actor-level backups from effective embedded item configurations. */
 export async function rebuildActorItemBackups({ includeCompendiums = false, notify = true } = {}) {
   if (!globalThis.game?.user?.isGM) return { actors: 0, items: 0, failed: 0, skipped: 0 };
 
@@ -279,15 +292,17 @@ export async function rebuildActorItemBackups({ includeCompendiums = false, noti
       continue;
     }
 
-    const entries = collectionContents(actor.items)
-      .map(item => {
-        const config = getStoredItemConfig(item) ?? getActorItemBackupConfig(item);
-        return isUsableConfig(config) ? makeBackupEntry(item, config) : null;
-      })
-      .filter(Boolean);
-
     try {
-      await actor.setFlag(MODULE_ID, FLAGS.actorBackup, backupStorePayload(entries));
+      const entries = await withActorBackupQueue(actor, async () => {
+        const nextEntries = collectionContents(actor.items)
+          .map(item => {
+            const config = getStoredItemConfig(item) ?? getActorItemBackupConfig(item);
+            return isUsableConfig(config) ? makeBackupEntry(item, config) : null;
+          })
+          .filter(Boolean);
+        await actor.setFlag(MODULE_ID, FLAGS.actorBackup, backupStorePayload(nextEntries));
+        return nextEntries;
+      });
       actorCount += 1;
       itemCount += entries.length;
     } catch (error) {
@@ -303,6 +318,7 @@ export async function rebuildActorItemBackups({ includeCompendiums = false, noti
   return result;
 }
 
+/** Restore missing item flags for all selected actors. */
 export async function restoreAllActorItemBackups({ includeCompendiums = false, notify = true } = {}) {
   if (!globalThis.game?.user?.isGM) return { actors: 0, restored: 0, ambiguous: 0, failed: 0, skipped: 0 };
 
@@ -327,6 +343,7 @@ export async function restoreAllActorItemBackups({ includeCompendiums = false, n
   return total;
 }
 
+/** Audit configured items, playlists, sounds, and ambiguous backup matches. */
 export async function auditItemSfxReferences({ includeCompendiums = false, notify = true } = {}) {
   const actors = await collectActors({ includeCompendiums });
   const result = {
@@ -345,7 +362,20 @@ export async function auditItemSfxReferences({ includeCompendiums = false, notif
     seen.add(key);
     result.documents += 1;
 
-    const config = getStoredItemConfig(item);
+    let backupConfig = null;
+    if (store) {
+      const matching = store.items
+        .map(entry => ({ entry, score: scoreBackupEntry(entry, item) }))
+        .filter(match => match.score >= BACKUP_MINIMUM_MATCH_SCORE)
+        .sort((a, b) => b.score - a.score);
+      if (matching.length > 1 && matching[0].score === matching[1].score) {
+        result.ambiguousBackup += 1;
+      } else if (matching.length) {
+        backupConfig = normalizeConfig(matching[0].entry);
+      }
+    }
+
+    const config = getStoredItemConfig(item) ?? backupConfig;
     if (!config) return;
     result.configured += 1;
     const playlist = globalThis.game?.playlists?.get(config.playlistId);
@@ -353,16 +383,13 @@ export async function auditItemSfxReferences({ includeCompendiums = false, notif
       result.missingPlaylist += 1;
       return;
     }
-    if (config.soundId !== PLAYBACK.random && config.soundId !== PLAYBACK.all && !playlist.sounds?.get(config.soundId)) {
-      result.missingSound += 1;
-    }
-
-    if (store) {
-      const scores = store.items
-        .map(entry => scoreBackupEntry(entry, item))
-        .filter(score => score >= 30)
-        .sort((a, b) => b - a);
-      if (scores.length > 1 && scores[0] === scores[1]) result.ambiguousBackup += 1;
+    const sounds = collectionContents(playlist.sounds);
+    if (config.soundId === PLAYBACK.random || config.soundId === PLAYBACK.all) {
+      if (!sounds.length) result.missingSound += 1;
+    } else {
+      const sound = playlist.sounds?.get?.(config.soundId)
+        ?? sounds.find(entry => entry?.id === config.soundId);
+      if (!sound) result.missingSound += 1;
     }
   };
 
@@ -373,14 +400,8 @@ export async function auditItemSfxReferences({ includeCompendiums = false, notif
   }
 
   if (includeCompendiums) {
-    for (const pack of globalThis.game?.packs ?? []) {
-      const documentName = pack?.documentName ?? pack?.metadata?.type;
-      if (documentName !== "Item") continue;
-      try {
-        for (const item of await pack.getDocuments()) auditItem(item);
-      } catch (error) {
-        console.warn(`${MODULE_ID} | failed to read Item compendium during audit`, pack?.collection, error);
-      }
+    for (const { documents } of await getPackDocuments("Item", "reference audit")) {
+      for (const item of documents) auditItem(item);
     }
   }
 
@@ -390,10 +411,31 @@ export async function auditItemSfxReferences({ includeCompendiums = false, notif
   return result;
 }
 
+/** Return whether a compendium pack is locked against document updates. */
 export function isPackLocked(pack) {
   return !!(pack?.locked ?? pack?.metadata?.locked);
 }
 
+/** Read documents from matching compendium packs while isolating pack failures. */
+async function getPackDocuments(documentName, warningContext) {
+  const results = [];
+  for (const pack of globalThis.game?.packs ?? []) {
+    const packDocumentName = pack?.documentName ?? pack?.metadata?.type;
+    if (packDocumentName !== documentName) continue;
+    try {
+      results.push({ pack, documents: await pack.getDocuments() });
+    } catch (error) {
+      console.warn(
+        `${MODULE_ID} | failed to read ${documentName} compendium during ${warningContext}`,
+        pack?.collection,
+        error
+      );
+    }
+  }
+  return results;
+}
+
+/** Map a source or compendium item to a unique imported actor item. */
 export function remapSourceItemToActor(sourceItem, actor) {
   if (!sourceItem || !actor?.items) return null;
   if (sourceItem.parent === actor) return sourceItem;

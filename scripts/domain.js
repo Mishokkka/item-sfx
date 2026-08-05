@@ -1,14 +1,17 @@
 import { ATTACK_ITEM_TYPES, BACKUP_VERSION, MODULE_ID } from "./constants.js";
 import { normalizeText, rawFlag, uniqueStrings } from "./utils.js";
 
+/** Normalize an item type for exact capability comparison. */
 export function normalizeItemType(type) {
   return normalizeText(type).replace(/[\s_-]+/g, "");
 }
 
+/** Return whether an item is an explicitly supported attack type. */
 export function isAttackCapableItem(item) {
   return ATTACK_ITEM_TYPES.has(normalizeItemType(item?.type));
 }
 
+/** Validate and normalize an Item SFX configuration object. */
 export function normalizeConfig(config) {
   if (!config || typeof config !== "object") return null;
   const playlistId = String(config.playlistId ?? "").trim();
@@ -17,14 +20,16 @@ export function normalizeConfig(config) {
   return {
     playlistId,
     soundId,
-    source: String(config.source ?? MODULE_ID)
+    source: String(config.source ?? MODULE_ID).trim() || MODULE_ID
   };
 }
 
+/** Return whether a value normalizes to a complete Item SFX configuration. */
 export function isUsableConfig(config) {
   return normalizeConfig(config) !== null;
 }
 
+/** Collect stable current and source identities for an item. */
 export function collectSourceIds(item) {
   const values = [
     item?.uuid,
@@ -33,11 +38,13 @@ export function collectSourceIds(item) {
     item?._source?.flags?.core?.sourceId,
     item?._stats?.compendiumSource,
     item?._source?._stats?.compendiumSource,
-    item?._stats?.duplicateSource
+    item?._stats?.duplicateSource,
+    item?._source?._stats?.duplicateSource
   ];
   return new Set(uniqueStrings(values));
 }
 
+/** Build a deterministic matching signature from stable item fields. */
 export function getItemSignature(item) {
   const system = item?.system ?? item?._source?.system ?? {};
   return [
@@ -56,6 +63,7 @@ export function getItemSignature(item) {
   ].join("|");
 }
 
+/** Create a versioned actor-backup entry for one configured item. */
 export function makeBackupEntry(item, config) {
   const normalized = normalizeConfig(config);
   if (!normalized) return null;
@@ -74,6 +82,7 @@ export function makeBackupEntry(item, config) {
   };
 }
 
+/** Normalize current and legacy actor-backup payloads. */
 export function normalizeBackupStore(store) {
   let items = [];
   if (Array.isArray(store)) items = store;
@@ -101,6 +110,7 @@ export function normalizeBackupStore(store) {
   };
 }
 
+/** Score how strongly a backup entry identifies an item. */
 export function scoreBackupEntry(entry, item) {
   if (!entry || !item) return 0;
   if (entry.itemId && item.id && entry.itemId === item.id) return 120;
@@ -121,6 +131,7 @@ export function scoreBackupEntry(entry, item) {
   return 0;
 }
 
+/** Select the sole highest-scoring backup match above a minimum score. */
 export function selectUniqueBestMatch(entries, item, { minimumScore = 1 } = {}) {
   const scored = (entries ?? [])
     .map(entry => ({ entry, score: scoreBackupEntry(entry, item) }))
@@ -132,6 +143,7 @@ export function selectUniqueBestMatch(entries, item, { minimumScore = 1 } = {}) 
   return scored[0].entry;
 }
 
+/** Build the canonical actor-backup storage payload. */
 export function backupStorePayload(entries) {
   return { version: BACKUP_VERSION, items: (entries ?? []).filter(Boolean) };
 }

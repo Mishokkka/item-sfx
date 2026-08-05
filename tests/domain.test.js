@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -9,7 +9,33 @@ import {
   scoreBackupEntry,
   selectUniqueBestMatch
 } from "../scripts/domain.js";
-import { extractRollMetadata, getRollTableReason } from "../scripts/chat/resolver.js";
+import {
+  analyzeAttackMessage,
+  extractRollMetadata,
+  getRollTableReason,
+  getSpeakerActor
+} from "../scripts/chat/resolver.js";
+
+const trackedGlobals = ["ChatMessage", "game", "fromUuid"];
+let savedGlobals;
+
+beforeEach(() => {
+  savedGlobals = new Map(trackedGlobals.map(key => [
+    key,
+    {
+      present: Object.hasOwn(globalThis, key),
+      value: globalThis[key]
+    }
+  ]));
+  for (const key of trackedGlobals) delete globalThis[key];
+});
+
+afterEach(() => {
+  for (const [key, saved] of savedGlobals) {
+    if (saved.present) globalThis[key] = saved.value;
+    else delete globalThis[key];
+  }
+});
 
 function item(overrides = {}) {
   return {
@@ -21,6 +47,34 @@ function item(overrides = {}) {
     flags: { core: { sourceId: "Compendium.world.weapons.source123" } },
     system: { category: "ranged", damage: 2, bonus: 1, range: "long", grip: 2 },
     ...overrides
+  };
+}
+
+function itemCollection(items) {
+  return {
+    contents: items,
+    get(id) { return items.find(entry => entry.id === id) ?? null; },
+    [Symbol.iterator]() { return items[Symbol.iterator](); }
+  };
+}
+
+function renderedRoot(textContent = "") {
+  return {
+    textContent,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    matches: () => false
+  };
+}
+
+function installResolverGlobals(actor, { fromUuid = undefined, scenes = undefined } = {}) {
+  globalThis.ChatMessage = { getSpeakerActor: () => actor };
+  if (fromUuid !== undefined) globalThis.fromUuid = fromUuid;
+  globalThis.game = {
+    settings: { get: () => false },
+    items: { get: () => null },
+    scenes,
+    actors: { get: id => id === actor?.id ? actor : null }
   };
 }
 
@@ -68,6 +122,15 @@ test("Forbidden Lands weapon roll metadata is extracted from Roll options", () =
   assert.ok(metadata.candidates.some(candidate => candidate.kind === "name" && candidate.value === "Musket"));
 });
 
+test("higher-priority duplicate candidate replaces a lower-priority candidate", () => {
+  const attack = item();
+  const metadata = extractRollMetadata({
+    rolls: [{ options: { isAttack: true, item: attack, attack } }]
+  });
+  const objectCandidate = metadata.candidates.find(candidate => candidate.kind === "object");
+  assert.match(objectCandidate.source, /\.attack$/);
+});
+
 test("Forbidden Lands monster attack metadata is extracted", () => {
   const attack = item({ type: "monsterAttack", name: "Слушает бетон!" });
   const message = {
@@ -88,21 +151,10 @@ test("RollTable flags are excluded", () => {
   assert.equal(getRollTableReason({ flags: { core: { RollTable: "table-id" } } }, null, null), "roll-table-flags");
 });
 
-import { analyzeAttackMessage } from "../scripts/chat/resolver.js";
-
-function itemCollection(items) {
-  return {
-    contents: items,
-    get(id) { return items.find(entry => entry.id === id) ?? null; },
-    [Symbol.iterator]() { return items[Symbol.iterator](); }
-  };
-}
-
 test("resolver chooses current embedded weapon by itemId", async () => {
   const musket = item();
   const actor = { id: "actor123", uuid: "Actor.actor123", name: "Shooter", items: itemCollection([musket]) };
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor);
 
   const message = {
     id: "message1",
@@ -117,14 +169,13 @@ test("resolver chooses current embedded weapon by itemId", async () => {
 test("resolver rejects non-attack roll even when it mentions a weapon", async () => {
   const musket = item();
   const actor = { id: "actor123", uuid: "Actor.actor123", name: "Shooter", items: itemCollection([musket]) };
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor);
 
   const result = await analyzeAttackMessage({
     id: "message2",
     speaker: { actor: actor.id },
     rolls: [{ options: { isAttack: false, itemId: musket.id, item: musket.name } }]
-  }, { querySelectorAll: () => [], querySelector: () => null, matches: () => false, textContent: "" }, null);
+  }, renderedRoot(), null);
 
   assert.equal(result.status, "ignored");
   assert.equal(result.reason, "no-explicit-attack-signal");
@@ -142,9 +193,7 @@ test("resolver remaps a compendium source weapon to imported actor item", async 
     uuid: "Compendium.world.weapons.source123",
     parent: { documentName: "Compendium" }
   });
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.fromUuid = async uuid => uuid === source.uuid ? source : null;
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor, { fromUuid: async uuid => uuid === source.uuid ? source : null });
 
   const result = await analyzeAttackMessage({
     id: "message3",
@@ -156,11 +205,47 @@ test("resolver remaps a compendium source weapon to imported actor item", async 
   assert.equal(result.item, imported);
 });
 
+test("object UUID identity wins over a colliding embedded item id", async () => {
+  const imported = item({
+    id: "imported12345678",
+    uuid: "Actor.newactor.Item.imported12345678",
+    flags: { core: { sourceId: "Compendium.world.weapons.source123" } }
+  });
+  const collision = item({
+    id: "source123",
+    uuid: "Actor.newactor.Item.source123",
+    name: "Unrelated sword",
+    flags: {}
+  });
+  const actor = {
+    id: "newactor",
+    uuid: "Actor.newactor",
+    name: "Imported",
+    items: itemCollection([collision, imported])
+  };
+  const sourceUuid = "Compendium.world.weapons.source123";
+  const sourceReference = item({
+    id: "source123",
+    uuid: sourceUuid,
+    parent: { documentName: "Compendium" }
+  });
+  const sourceDocument = { ...sourceReference, documentName: "Item" };
+  installResolverGlobals(actor, { fromUuid: async uuid => uuid === sourceUuid ? sourceDocument : null });
+
+  const result = await analyzeAttackMessage({
+    id: "object-collision-message",
+    speaker: { actor: actor.id },
+    rolls: [{ options: { isAttack: true, item: sourceReference } }]
+  });
+
+  assert.equal(result.status, "matched");
+  assert.equal(result.item, imported);
+});
+
 test("RollTable exclusion wins even when roll options claim an attack", async () => {
   const musket = item();
   const actor = { id: "actor123", uuid: "Actor.actor123", name: "Shooter", items: itemCollection([musket]) };
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor);
 
   const result = await analyzeAttackMessage({
     id: "table-message",
@@ -191,9 +276,7 @@ test("resolver remaps a compendium monster attack to the imported actor item", a
     parent: { documentName: "Compendium" },
     system: imported.system
   });
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.fromUuid = async uuid => uuid === source.uuid ? source : null;
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor, { fromUuid: async uuid => uuid === source.uuid ? source : null });
 
   const result = await analyzeAttackMessage({
     id: "monster-message",
@@ -213,20 +296,13 @@ test("monster attack text fallback is exact and unique", async () => {
     name: "Слушает бетон!"
   });
   const actor = { id: "monster", uuid: "Actor.monster", name: "Смотритель", items: itemCollection([attack]) };
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor);
 
-  const root = {
-    textContent: "Слушает бетон!",
-    querySelectorAll: () => [],
-    querySelector: () => null,
-    matches: () => false
-  };
   const result = await analyzeAttackMessage({
     id: "monster-text-message",
     speaker: { actor: actor.id },
     rolls: [{ options: { isAttack: true, isMonsterAttack: true } }]
-  }, root, null);
+  }, renderedRoot("Слушает бетон!"), null);
 
   assert.equal(result.status, "matched");
   assert.equal(result.item, attack);
@@ -264,9 +340,7 @@ test("stale unresolved UUID falls back to actor backup", async () => {
       }
     }
   };
-  globalThis.ChatMessage = { getSpeakerActor: () => actor };
-  globalThis.fromUuid = async () => null;
-  globalThis.game = { settings: { get: () => false }, items: { get: () => null } };
+  installResolverGlobals(actor, { fromUuid: async () => null });
 
   const result = await analyzeAttackMessage({
     id: "stale-uuid-message",
@@ -276,4 +350,65 @@ test("stale unresolved UUID falls back to actor backup", async () => {
 
   assert.equal(result.status, "matched");
   assert.equal(result.item, current);
+});
+
+test("same-priority authoritative candidates resolving to different items fail closed", async () => {
+  const first = item({ id: "firstitem1234567", uuid: "Actor.actor123.Item.firstitem1234567" });
+  const second = item({ id: "seconditem123456", uuid: "Actor.actor123.Item.seconditem123456" });
+  const actor = { id: "actor123", uuid: "Actor.actor123", items: itemCollection([first, second]) };
+  installResolverGlobals(actor);
+
+  const result = await analyzeAttackMessage({
+    id: "ambiguous-message",
+    speaker: { actor: actor.id },
+    rolls: [{ options: { isAttack: true, itemId: first.id, weaponId: second.id } }]
+  }, renderedRoot(), null);
+
+  assert.equal(result.status, "ignored");
+  assert.equal(result.reason, "ambiguous-item-candidates");
+});
+
+test("resolved non-attack item fails closed", async () => {
+  const armor = item({ type: "armor" });
+  const actor = { id: "actor123", uuid: "Actor.actor123", items: itemCollection([armor]) };
+  installResolverGlobals(actor);
+
+  const result = await analyzeAttackMessage({
+    id: "armor-message",
+    speaker: { actor: actor.id },
+    rolls: [{ options: { isAttack: true, itemId: armor.id } }]
+  }, renderedRoot(), null);
+
+  assert.equal(result.status, "ignored");
+  assert.equal(result.reason, "resolved-item-is-not-attack-capable");
+});
+
+test("attack without a resolvable item waits for rendered markup", async () => {
+  const actor = { id: "actor123", uuid: "Actor.actor123", items: itemCollection([]) };
+  installResolverGlobals(actor);
+
+  const result = await analyzeAttackMessage({
+    id: "needs-render-message",
+    speaker: { actor: actor.id },
+    rolls: [{ options: { isAttack: true } }]
+  }, null, null);
+
+  assert.equal(result.status, "needs-render");
+  assert.equal(result.reason, "attack-without-item-before-render");
+});
+
+test("speaker token falls back to scene lookup when fromUuid returns no actor", async () => {
+  const actor = { id: "scene-actor" };
+  const token = { actor };
+  globalThis.ChatMessage = { getSpeakerActor: () => null };
+  globalThis.fromUuid = async () => null;
+  globalThis.game = {
+    scenes: {
+      get: id => id === "scene1" ? { tokens: { get: tokenId => tokenId === "token1" ? token : null } } : null
+    },
+    actors: { get: () => null }
+  };
+
+  const result = await getSpeakerActor({ speaker: { scene: "scene1", token: "token1" } });
+  assert.equal(result, actor);
 });

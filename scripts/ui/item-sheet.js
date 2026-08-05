@@ -1,8 +1,10 @@
 import { SETTINGS } from "../constants.js";
+import { isAttackCapableItem } from "../domain.js";
 import { getSetting } from "../settings.js";
 import { asHTMLElement, localize } from "../utils.js";
 import { openItemSfxForm } from "./dialogs.js";
 
+/** Resolve an Item document from a legacy or ApplicationV2 sheet instance. */
 function getItemFromApp(app) {
   for (const candidate of [app?.document, app?.object, app?.item, app?.options?.document]) {
     if (candidate?.documentName === "Item") return candidate;
@@ -10,6 +12,7 @@ function getItemFromApp(app) {
   return null;
 }
 
+/** Resolve an Item document from a sheet-render context object. */
 function getItemFromContext(context) {
   for (const candidate of [context?.item, context?.document, context?.object]) {
     if (candidate?.documentName === "Item") return candidate;
@@ -17,21 +20,25 @@ function getItemFromContext(context) {
   return null;
 }
 
+/** Check user, document type, module state, and editability before showing controls. */
 function canConfigureItem(app, item) {
   return !!(
     getSetting(SETTINGS.enabled, true)
     && globalThis.game?.user?.isGM
     && item
+    && isAttackCapableItem(item)
     && app?.isEditable !== false
     && item?.sheet?.isEditable !== false
   );
 }
 
+/** Insert the Item SFX configuration button into a sheet window header. */
 function injectButton(frame, item) {
   const header = frame?.querySelector?.(".window-header, header.window-header");
   if (!header || header.querySelector(".flis-header-button")) return;
 
-  const button = globalThis.document.createElement("a");
+  const button = globalThis.document.createElement("button");
+  button.type = "button";
   button.className = "flis-header-button";
   button.title = localize("FLIS.ConfigureTitle");
   button.setAttribute("aria-label", localize("FLIS.ConfigureTitle"));
@@ -47,6 +54,7 @@ function injectButton(frame, item) {
   else header.append(button);
 }
 
+/** Safely schedule Item SFX button injection for supported sheet hooks. */
 export function tryInjectItemButton(app, html, context, options) {
   try {
     const item = getItemFromApp(app) ?? getItemFromContext(context) ?? getItemFromContext(options);

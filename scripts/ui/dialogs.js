@@ -13,32 +13,42 @@ import {
   localize
 } from "../utils.js";
 
-const ApplicationV2Base = globalThis.foundry?.applications?.api?.ApplicationV2
-  ?? class ItemSfxUnavailableApplicationV2 {};
+/** Create the minimal ApplicationV2 bridge used by settings.registerMenu. */
+export function getItemSfxToolsMenuBridge() {
+  const ApplicationV2Base = globalThis.foundry?.applications?.api?.ApplicationV2;
+  if (!ApplicationV2Base) {
+    throw new Error(`${MODULE_ID} | ApplicationV2 is unavailable during settings registration`);
+  }
 
-export class ItemSfxToolsMenuBridge extends ApplicationV2Base {
-  static DEFAULT_OPTIONS = {
-    id: "flis-tools-bridge",
-    window: { title: "FLIS.Tools.Title" },
-    position: { width: 1, height: 1 }
+  return class ItemSfxToolsMenuBridge extends ApplicationV2Base {
+    static DEFAULT_OPTIONS = {
+      id: "flis-tools-bridge",
+      window: { title: "FLIS.Tools.Title" },
+      position: { width: 1, height: 1 }
+    };
+
+    /** Open the tools dialog when Foundry renders the settings-menu bridge. */
+    render(..._args) {
+      void openItemSfxTools();
+      return this;
+    }
+
+    /** Provide an inert render result for the settings-menu bridge. */
+    async _renderHTML() {
+      return globalThis.document?.createElement?.("div") ?? "";
+    }
+
+    /** Suppress DOM replacement for the settings-menu bridge. */
+    _replaceHTML() {}
   };
-
-  render(..._args) {
-    void openItemSfxTools();
-    return this;
-  }
-
-  async _renderHTML() {
-    return globalThis.document?.createElement?.("div") ?? "";
-  }
-
-  _replaceHTML() {}
 }
 
+/** Return the current Foundry DialogV2 implementation. */
 function getDialogV2() {
   return globalThis.foundry?.applications?.api?.DialogV2;
 }
 
+/** Resolve an Item from a direct document or sheet-like argument. */
 function getItemFromArgument(itemOrApp) {
   if (itemOrApp?.documentName === "Item") return itemOrApp;
   for (const candidate of [itemOrApp?.document, itemOrApp?.object, itemOrApp?.item, itemOrApp?.options?.document]) {
@@ -47,6 +57,7 @@ function getItemFromArgument(itemOrApp) {
   return null;
 }
 
+/** Open the GM configuration dialog for one attack-capable item. */
 export async function openItemSfxForm(itemOrApp) {
   if (!globalThis.game?.user?.isGM) {
     globalThis.ui?.notifications?.warn(localize("FLIS.Warn.GmOnly"));
@@ -110,6 +121,7 @@ export async function openItemSfxForm(itemOrApp) {
   }
 }
 
+/** Build escaped playlist and sound controls for the item dialog. */
 function buildItemDialogContent(current) {
   const playlistOptions = collectionContents(globalThis.game?.playlists).map(playlist => {
     const selected = playlist.id === current.playlistId ? " selected" : "";
@@ -134,6 +146,7 @@ function buildItemDialogContent(current) {
     </section>`;
 }
 
+/** Populate and synchronize sound choices with the selected playlist. */
 function wireItemDialog(rootValue, currentSoundId = "") {
   const root = asHTMLElement(rootValue);
   const playlistSelect = root?.querySelector?.(".flis-playlist-select");
@@ -166,6 +179,7 @@ function wireItemDialog(rootValue, currentSoundId = "") {
   fillSounds();
 }
 
+/** Open the GM maintenance menu and dispatch the selected operation. */
 export async function openItemSfxTools() {
   if (!globalThis.game?.user?.isGM) {
     globalThis.ui?.notifications?.warn(localize("FLIS.Warn.GmOnly"));
@@ -175,6 +189,7 @@ export async function openItemSfxTools() {
   const DialogV2 = getDialogV2();
   if (!DialogV2) throw new Error(`${MODULE_ID} | DialogV2 is unavailable in this Foundry version`);
 
+  let toolsRoot = null;
   const result = await DialogV2.wait({
     window: { title: localize("FLIS.Tools.Title") },
     content: `
@@ -183,28 +198,44 @@ export async function openItemSfxTools() {
         <p class="notes">${localize("FLIS.Tools.BackupNotes")}</p>
         <p class="notes">${localize("FLIS.Tools.RestoreNotes")}</p>
         <p class="notes">${localize("FLIS.Tools.AuditNotes")}</p>
+        <label class="flis-tools-option">
+          <input type="checkbox" name="includeCompendiums">
+          <span>${localize("FLIS.Tools.IncludeCompendiums")}</span>
+        </label>
       </section>`,
     classes: [MODULE_ID, "flis-tools-dialog"],
     rejectClose: false,
     modal: false,
+    render: (...args) => {
+      toolsRoot = asHTMLElementFromArgs(args);
+    },
     buttons: [
       {
         action: "restore",
         label: "FLIS.Tools.Restore",
         icon: "fa-solid fa-rotate-left",
-        callback: () => "restore"
+        callback: () => ({
+          action: "restore",
+          includeCompendiums: !!toolsRoot?.querySelector?.("[name='includeCompendiums']")?.checked
+        })
       },
       {
         action: "backup",
         label: "FLIS.Tools.Backup",
         icon: "fa-solid fa-shield-halved",
-        callback: () => "backup"
+        callback: () => ({
+          action: "backup",
+          includeCompendiums: !!toolsRoot?.querySelector?.("[name='includeCompendiums']")?.checked
+        })
       },
       {
         action: "audit",
         label: "FLIS.Tools.Audit",
         icon: "fa-solid fa-magnifying-glass",
-        callback: () => "audit"
+        callback: () => ({
+          action: "audit",
+          includeCompendiums: !!toolsRoot?.querySelector?.("[name='includeCompendiums']")?.checked
+        })
       },
       {
         action: "close",
@@ -215,7 +246,49 @@ export async function openItemSfxTools() {
     ]
   });
 
-  if (result === "backup") return rebuildActorItemBackups({ includeCompendiums: true });
-  if (result === "restore") return restoreAllActorItemBackups({ includeCompendiums: true });
-  if (result === "audit") return auditItemSfxReferences({ includeCompendiums: true });
+  if (!result) return;
+  if (result.action === "audit") {
+    return auditItemSfxReferences({ includeCompendiums: result.includeCompendiums });
+  }
+  if (result.action === "backup" || result.action === "restore") {
+    const confirmed = await confirmMaintenanceAction(DialogV2, result.action, result.includeCompendiums);
+    if (!confirmed) return;
+    if (result.action === "backup") {
+      return rebuildActorItemBackups({ includeCompendiums: result.includeCompendiums });
+    }
+    return restoreAllActorItemBackups({ includeCompendiums: result.includeCompendiums });
+  }
+}
+
+/** Require explicit confirmation before a document-changing maintenance action. */
+async function confirmMaintenanceAction(DialogV2, action, includeCompendiums) {
+  const actionKey = action === "backup" ? "Backup" : "Restore";
+  const result = await DialogV2.wait({
+    window: { title: localize(`FLIS.Tools.Confirm${actionKey}Title`) },
+    content: `
+      <section class="flis-tools-confirmation">
+        <p>${localize(`FLIS.Tools.Confirm${actionKey}`)}</p>
+        ${includeCompendiums ? `<p class="warning">${localize("FLIS.Tools.CompendiumWarning")}</p>` : ""}
+      </section>`,
+    classes: [MODULE_ID, "flis-tools-confirm-dialog"],
+    rejectClose: false,
+    modal: true,
+    buttons: [
+      {
+        action: "confirm",
+        label: "FLIS.Tools.Confirm",
+        icon: "fa-solid fa-triangle-exclamation",
+        default: false,
+        callback: () => true
+      },
+      {
+        action: "cancel",
+        label: "FLIS.Cancel",
+        icon: "fa-solid fa-xmark",
+        default: true,
+        callback: () => false
+      }
+    ]
+  });
+  return result === true;
 }

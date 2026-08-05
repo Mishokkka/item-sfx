@@ -4,7 +4,9 @@ import {
   PLAY_MODES,
   SETTINGS
 } from "./constants.js";
+import { collectionContents } from "./utils.js";
 
+/** Read a module setting and return a fallback when Foundry cannot supply it. */
 export function getSetting(key, fallback) {
   try {
     return globalThis.game?.settings?.get(MODULE_ID, key) ?? fallback;
@@ -13,11 +15,13 @@ export function getSetting(key, fallback) {
   }
 }
 
+/** Write a namespaced debug message when client debugging is enabled. */
 export function debug(...args) {
   if (!getSetting(SETTINGS.debug, false)) return;
   console.log(`${MODULE_ID} |`, ...args);
 }
 
+/** Register module settings and the ApplicationV2 tools menu. */
 export function registerSettings(ToolsMenuClass) {
   const settings = globalThis.game?.settings;
   if (!settings) throw new Error(`${MODULE_ID} | game.settings is unavailable`);
@@ -75,6 +79,7 @@ export function registerSettings(ToolsMenuClass) {
   }
 }
 
+/** Determine whether the current client should play and broadcast a message SFX. */
 export function getPlaybackPolicy(message) {
   const mode = getSetting(SETTINGS.playMode, PLAY_MODES.firstGM);
   const currentUser = globalThis.game?.user ?? null;
@@ -90,7 +95,11 @@ export function getPlaybackPolicy(message) {
   }
 
   if (mode === PLAY_MODES.author) {
-    const authorId = message?.user?.id ?? message?.user ?? message?.userId ?? message?._source?.user;
+    const authorId = resolveUserId(message?.author)
+      ?? resolveUserId(message?.user)
+      ?? resolveUserId(message?.userId)
+      ?? resolveUserId(message?._source?.user)
+      ?? resolveUserId(message?._source?.author);
     const allowed = !!currentUser?.id && String(authorId ?? "") === String(currentUser.id);
     return {
       allowed,
@@ -102,11 +111,8 @@ export function getPlaybackPolicy(message) {
     };
   }
 
-  const activeGMs = (globalThis.game?.users?.contents ?? Array.from(globalThis.game?.users ?? []))
-    .filter(user => user?.active && user?.isGM)
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  const firstGM = activeGMs[0] ?? null;
-  const allowed = firstGM?.id === currentUser?.id;
+  const firstGM = getActiveGMs()[0] ?? null;
+  const allowed = !!firstGM?.id && !!currentUser?.id && firstGM.id === currentUser.id;
   return {
     allowed,
     broadcast: allowed,
@@ -117,14 +123,28 @@ export function getPlaybackPolicy(message) {
   };
 }
 
+/** Return whether the current user is the deterministic first active GM. */
 export function isFirstActiveGM() {
-  const users = globalThis.game?.users?.contents ?? Array.from(globalThis.game?.users ?? []);
-  const firstGM = users
-    .filter(user => user?.active && user?.isGM)
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
-  return firstGM?.id === globalThis.game?.user?.id;
+  const firstGM = getActiveGMs()[0] ?? null;
+  const currentUser = globalThis.game?.user ?? null;
+  return !!firstGM?.id && !!currentUser?.id && firstGM.id === currentUser.id;
 }
 
+/** Return active GMs in deterministic user-id order. */
+function getActiveGMs() {
+  return collectionContents(globalThis.game?.users)
+    .filter(user => user?.active && user?.isGM && user?.id)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+}
+
+/** Normalize a Foundry user reference to a string identifier. */
+function resolveUserId(value) {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return value.id == null ? null : String(value.id);
+}
+
+/** Create the default Item SFX playlist once when the configured GM is authoritative. */
 export async function ensureDefaultPlaylist() {
   if (!getSetting(SETTINGS.createPlaylist, true) || !isFirstActiveGM()) return null;
   const existing = globalThis.game?.playlists?.getName?.(DEFAULT_PLAYLIST_NAME);

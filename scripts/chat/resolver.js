@@ -27,19 +27,23 @@ const OBJECT_KEYS = new Set([
   "sourceItem", "usedItem", "rolledItem", "attackItem", "monsterAttackItem"
 ]);
 
+/** Return all rolls attached to a ChatMessage across Foundry data shapes. */
 function getRolls(message) {
   const rolls = message?.rolls ?? message?._source?.rolls;
   return collectionContents(rolls);
 }
 
+/** Return the number of rolls attached to a ChatMessage. */
 export function getRollCount(message) {
   return getRolls(message).length;
 }
 
+/** Interpret strict boolean-like values used by roll metadata. */
 function directBoolean(value) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 
+/** Build a stable deduplication key for a resolver candidate. */
 function candidateKey(candidate) {
   if (candidate.kind === "document" || candidate.kind === "object") {
     const value = candidate.value ?? {};
@@ -50,14 +54,24 @@ function candidateKey(candidate) {
   return `${candidate.kind}:${String(candidate.value ?? "")}`;
 }
 
+/** Insert or replace a resolver candidate by authority and priority. */
 function pushCandidate(output, candidate) {
   if (!candidate?.value) return;
   const key = candidateKey(candidate);
-  if (output._keys.has(key)) return;
-  output._keys.add(key);
-  output.candidates.push(candidate);
+  const existingIndex = output._candidateIndexes.get(key);
+  if (existingIndex === undefined) {
+    output._candidateIndexes.set(key, output.candidates.length);
+    output.candidates.push(candidate);
+    return;
+  }
+
+  const existing = output.candidates[existingIndex];
+  const isBetter = Number(!!candidate.authority) > Number(!!existing.authority)
+    || (!!candidate.authority === !!existing.authority && candidate.priority > existing.priority);
+  if (isBetter) output.candidates[existingIndex] = candidate;
 }
 
+/** Extract typed document, UUID, id, and name candidates from a metadata value. */
 function addValueCandidate(output, value, { hint = "", source = "unknown", priority = 0, authority = false, type = "" } = {}) {
   if (value == null) return;
   if (Array.isArray(value)) {
@@ -79,11 +93,15 @@ function addValueCandidate(output, value, { hint = "", source = "unknown", prior
       });
     }
 
-    for (const key of ["uuid", "documentUuid", "itemUuid", "weaponUuid", "attackUuid", "monsterAttackUuid"]) {
+    const uuidKeys = ["uuid", "documentUuid", "itemUuid", "weaponUuid", "attackUuid", "monsterAttackUuid"];
+    const hasDocumentUuid = uuidKeys.some(key => isDocumentUuid(String(value[key] ?? "")));
+    for (const key of uuidKeys) {
       if (value[key] != null) addValueCandidate(output, value[key], { hint: "uuid", source, priority: priority + 10, authority, type: value.type ?? type });
     }
-    for (const key of ["id", "_id", "itemId", "weaponId", "attackId", "monsterAttackId"]) {
-      if (value[key] != null) addValueCandidate(output, value[key], { hint: "id", source, priority: priority + 5, authority, type: value.type ?? type });
+    if (!hasDocumentUuid) {
+      for (const key of ["id", "_id", "itemId", "weaponId", "attackId", "monsterAttackId"]) {
+        if (value[key] != null) addValueCandidate(output, value[key], { hint: "id", source, priority: priority + 5, authority, type: value.type ?? type });
+      }
     }
     if (value.name != null) addValueCandidate(output, value.name, { hint: "name", source, priority, authority, type: value.type ?? type });
     return;
@@ -91,7 +109,7 @@ function addValueCandidate(output, value, { hint = "", source = "unknown", prior
 
   const text = String(value).trim();
   if (!text) return;
-  const lowerHint = String(hint).toLocaleLowerCase();
+  const lowerHint = String(hint).toLowerCase();
 
   if (lowerHint.includes("uuid") || isDocumentUuid(text)) {
     if (isDocumentUuid(text)) pushCandidate(output, { kind: "uuid", value: text, source, priority: priority + 10, authority, type });
@@ -108,6 +126,7 @@ function addValueCandidate(output, value, { hint = "", source = "unknown", prior
   }
 }
 
+/** Inspect one known roll-options object for attack metadata. */
 function inspectOptionsRoot(root, output, source, priority) {
   if (!root || typeof root !== "object") return;
 
@@ -123,9 +142,9 @@ function inspectOptionsRoot(root, output, source, priority) {
     else if (OBJECT_KEYS.has(key)) addValueCandidate(output, value, {
       hint: key,
       source: `${source}.${key}`,
-      priority: priority + (key === "attack" || key.toLocaleLowerCase().includes("monsterattack") ? 30 : 10),
+      priority: priority + (key === "attack" || key.toLowerCase().includes("monsterattack") ? 30 : 10),
       authority: true,
-      type: key.toLocaleLowerCase().includes("monsterattack") ? "monsterAttack" : ""
+      type: key.toLowerCase().includes("monsterattack") ? "monsterAttack" : ""
     });
   }
 
@@ -140,6 +159,7 @@ function inspectOptionsRoot(root, output, source, priority) {
   }
 }
 
+/** Collect supported roll-options representations without mutating a roll. */
 function rollOptionRoots(roll) {
   const roots = [
     roll?.options,
@@ -156,8 +176,9 @@ function rollOptionRoots(roll) {
   return roots.filter(root => root && typeof root === "object");
 }
 
-function inspectStrictFlagObject(flags, output, source = "flags", depth = 0) {
-  if (!flags || typeof flags !== "object" || depth > 3) return;
+/** Inspect namespaced flag objects without recursively trusting arbitrary data. */
+function inspectStrictFlagObject(flags, output, source = "flags") {
+  if (!flags || typeof flags !== "object") return;
   for (const [namespace, value] of Object.entries(flags)) {
     if (!value || typeof value !== "object") continue;
     inspectOptionsRoot(value, output, `${source}.${namespace}`, 80);
@@ -169,6 +190,7 @@ function inspectStrictFlagObject(flags, output, source = "flags", depth = 0) {
   }
 }
 
+/** Extract authoritative attack candidates from rendered chat markup. */
 function collectDomCandidates(root, output) {
   if (!root?.querySelectorAll) return;
 
@@ -225,12 +247,13 @@ function collectDomCandidates(root, output) {
   }
 }
 
+/** Collect and prioritize explicit attack metadata from message, context, and DOM. */
 export function extractRollMetadata(message, root = null, context = null) {
   const output = {
     isAttack: false,
     isMonsterAttack: false,
     candidates: [],
-    _keys: new Set()
+    _candidateIndexes: new Map()
   };
 
   for (const [index, roll] of getRolls(message).entries()) {
@@ -247,10 +270,11 @@ export function extractRollMetadata(message, root = null, context = null) {
   collectDomCandidates(root, output);
 
   output.candidates.sort((a, b) => b.priority - a.priority);
-  delete output._keys;
+  delete output._candidateIndexes;
   return output;
 }
 
+/** Return the fail-closed reason when a message is a RollTable result. */
 export function getRollTableReason(message, root, context) {
   const flagSets = [message?.flags, message?._source?.flags, context?.flags, context?.message?.flags];
   for (const flags of flagSets) {
@@ -271,6 +295,7 @@ export function getRollTableReason(message, root, context) {
   return null;
 }
 
+/** Resolve the ChatMessage speaker actor with UUID and scene-token fallbacks. */
 export async function getSpeakerActor(message) {
   const speaker = message?.speaker ?? message?._source?.speaker ?? {};
   try {
@@ -281,28 +306,34 @@ export async function getSpeakerActor(message) {
   }
 
   if (speaker.scene && speaker.token) {
+    let token = null;
     try {
-      const token = await globalThis.fromUuid?.(`Scene.${speaker.scene}.Token.${speaker.token}`);
-      if (token?.actor) return token.actor;
+      token = await globalThis.fromUuid?.(`Scene.${speaker.scene}.Token.${speaker.token}`);
     } catch (_error) {
-      const scene = globalThis.game?.scenes?.get?.(speaker.scene);
-      const token = scene?.tokens?.get?.(speaker.token);
-      if (token?.actor) return token.actor;
+      // Fall through to the direct scene/token lookup.
     }
+    if (token?.actor) return token.actor;
+
+    const scene = globalThis.game?.scenes?.get?.(speaker.scene);
+    token = scene?.tokens?.get?.(speaker.token);
+    if (token?.actor) return token.actor;
   }
 
   return speaker.actor ? globalThis.game?.actors?.get?.(speaker.actor) ?? null : null;
 }
 
+/** Return an actor item collection as an array. */
 function actorItems(actor) {
   return collectionContents(actor?.items);
 }
 
+/** Return the sole unique document in a candidate collection. */
 function exactUnique(items) {
   const unique = [...new Map((items ?? []).map(item => [item?.uuid ?? item?.id, item])).values()].filter(Boolean);
   return unique.length === 1 ? unique[0] : null;
 }
 
+/** Resolve a uniquely named actor item with an optional exact type hint. */
 function resolveActorItemByName(actor, name, typeHint = "") {
   const normalizedName = normalizeText(name);
   if (!normalizedName) return null;
@@ -314,6 +345,7 @@ function resolveActorItemByName(actor, name, typeHint = "") {
   return exactUnique(matches);
 }
 
+/** Resolve an actor item by current, source, or backup identity. */
 function resolveActorItemById(actor, id) {
   if (!actor?.items || !id) return null;
   const direct = actor.items.get?.(id);
@@ -333,6 +365,7 @@ function resolveActorItemById(actor, id) {
   return exactUnique(matches) ?? findActorItemFromBackupCandidate(actor, id);
 }
 
+/** Resolve one metadata candidate to an Item document. */
 async function resolveCandidate(candidate, actor) {
   if (!candidate) return null;
 
@@ -344,14 +377,17 @@ async function resolveCandidate(candidate, actor) {
 
   if (candidate.kind === "object") {
     const value = candidate.value;
+    const uuid = value.uuid ?? value.itemUuid ?? value.attackUuid;
+    if (uuid) {
+      const byUuid = await resolveCandidate({ ...candidate, kind: "uuid", value: uuid }, actor);
+      if (byUuid) return byUuid;
+    }
     if (actor) {
       const byId = resolveActorItemById(actor, value.id ?? value._id ?? value.itemId ?? value.attackId);
       if (byId) return byId;
       const byName = resolveActorItemByName(actor, value.name, value.type ?? candidate.type);
       if (byName) return byName;
     }
-    const uuid = value.uuid ?? value.itemUuid ?? value.attackUuid;
-    if (uuid) return resolveCandidate({ ...candidate, kind: "uuid", value: uuid }, actor);
     return null;
   }
 
@@ -384,6 +420,7 @@ async function resolveCandidate(candidate, actor) {
   return null;
 }
 
+/** Resolve only the highest viable priority group and fail on ambiguity. */
 async function resolveHighestPriorityCandidates(candidates, actor) {
   const priorities = [...new Set((candidates ?? []).map(candidate => candidate.priority))].sort((a, b) => b - a);
   for (const priority of priorities) {
@@ -401,6 +438,7 @@ async function resolveHighestPriorityCandidates(candidates, actor) {
   return { item: null, candidate: null, ambiguous: false };
 }
 
+/** Find a unique monster attack by exact rendered-text boundary matching. */
 function findExactMonsterAttackInMessage(actor, message, root) {
   const text = normalizeText([
     root?.textContent ?? "",
@@ -419,6 +457,7 @@ function findExactMonsterAttackInMessage(actor, message, root) {
   return exactUnique(matches);
 }
 
+/** Classify an attack message and resolve its unique supported Item. */
 export async function analyzeAttackMessage(message, root = null, context = null) {
   const rollCount = getRollCount(message);
   if (!rollCount) return { status: "ignored", reason: "no-roll", rollCount };

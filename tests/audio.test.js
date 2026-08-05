@@ -52,3 +52,25 @@ test("everyone playback mode never rebroadcasts", () => {
   assert.equal(policy.allowed, true);
   assert.equal(policy.broadcast, false);
 });
+
+test("missing module socket does not replay the sound through AudioHelper", async () => {
+  const calls = { soundPlay: 0, helperPlay: 0 };
+  class Sound {
+    async load() { return this; }
+    async play() { calls.soundPlay += 1; return this; }
+  }
+  const sound = { id: "sound1", path: "sounds/shot.ogg", volume: 0.5 };
+  const playlist = { id: "playlist1", sounds: collection([sound]) };
+  globalThis.foundry = { audio: { Sound } };
+  globalThis.AudioHelper = { play() { calls.helperPlay += 1; } };
+  globalThis.game = {
+    user: { id: "gm1" },
+    playlists: { get: id => id === playlist.id ? playlist : null }
+  };
+
+  await playItemSfx({ playlistId: playlist.id, soundId: sound.id }, { broadcast: true });
+
+  assert.equal(calls.soundPlay, 1);
+  assert.equal(calls.helperPlay, 0);
+  delete globalThis.AudioHelper;
+});

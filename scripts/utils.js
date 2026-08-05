@@ -1,3 +1,4 @@
+/** Convert Foundry collections, arrays, and iterables to a plain array. */
 export function collectionContents(collection) {
   if (!collection) return [];
   if (Array.isArray(collection)) return collection;
@@ -9,6 +10,7 @@ export function collectionContents(collection) {
   }
 }
 
+/** Normalize text for locale-independent matching. */
 export function normalizeText(value) {
   return String(value ?? "")
     .replace(/<[^>]*>/g, " ")
@@ -16,9 +18,10 @@ export function normalizeText(value) {
     .replace(/[\u201c\u201d]/g, '"')
     .replace(/\s+/g, " ")
     .trim()
-    .toLocaleLowerCase();
+    .toLowerCase();
 }
 
+/** Extract readable text from an HTML fragment. */
 export function stripHtml(value) {
   const text = String(value ?? "");
   if (!text.includes("<")) return text;
@@ -32,6 +35,7 @@ export function stripHtml(value) {
   return text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** Escape a value for safe insertion into generated HTML. */
 export function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -41,18 +45,21 @@ export function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+/** Normalize, remove blanks, and deduplicate string values. */
 export function uniqueStrings(values) {
   return [...new Set((values ?? [])
     .map(value => String(value ?? "").trim())
     .filter(Boolean))];
 }
 
+/** Clamp a finite numeric value to an inclusive range. */
 export function clamp(value, minimum = 0, maximum = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return minimum;
   return Math.min(maximum, Math.max(minimum, number));
 }
 
+/** Read a raw flag from document data without depending on document methods. */
 export function rawFlag(document, scope, key) {
   if (!document || !scope || !key) return undefined;
 
@@ -72,6 +79,7 @@ export function rawFlag(document, scope, key) {
   }
 }
 
+/** Read a document flag with raw-data fallback for partially initialized documents. */
 export function safeGetFlag(document, scope, key) {
   if (!document) return undefined;
   try {
@@ -82,10 +90,7 @@ export function safeGetFlag(document, scope, key) {
   }
 }
 
-export function hasOwnFlag(document, scope, key) {
-  return rawFlag(document, scope, key) !== undefined;
-}
-
+/** Resolve supported Foundry wrapper values to an HTMLElement. */
 export function asHTMLElement(value) {
   const HTMLElementClass = globalThis.HTMLElement;
   if (!value || !HTMLElementClass) return null;
@@ -97,6 +102,7 @@ export function asHTMLElement(value) {
   return null;
 }
 
+/** Find the first HTMLElement contained in a hook argument list. */
 export function asHTMLElementFromArgs(args) {
   for (const argument of args ?? []) {
     const element = asHTMLElement(argument);
@@ -109,28 +115,24 @@ export function asHTMLElementFromArgs(args) {
   return null;
 }
 
-export function getProperty(object, path) {
-  if (!object || !path) return undefined;
-  return String(path).split(".").reduce((value, key) => value?.[key], object);
-}
-
+/** Resolve a localization key with a key fallback. */
 export function localize(key) {
   return globalThis.game?.i18n?.localize?.(key) ?? key;
 }
 
+/** Format a localization key with a key fallback. */
 export function localizeFormat(key, data) {
   return globalThis.game?.i18n?.format?.(key, data) ?? key;
 }
 
+/** Validate a plausible Foundry document identifier. */
 export function isDocumentId(value) {
   return /^[A-Za-z0-9_-]{8,64}$/.test(String(value ?? "").trim());
 }
 
+/** Validate a bounded Foundry document UUID prefix. */
 export function isDocumentUuid(value) {
   const text = String(value ?? "").trim();
   return /^(Item|Actor|Scene|Compendium)\./.test(text) && text.length <= 512;
 }
 
-export function nowIso() {
-  return new Date().toISOString();
-}
